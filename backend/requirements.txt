@@ -1,0 +1,12 @@
+# FraudTrace AI — Backend Dependencies
+# Install with:
+#   backend/.venv/Scripts/pip.exe install -r backend/requirements.txt
+
+# Web framework — handles HTTP requests and auto-generates API docs
+fastapi
+
+# ASGI server — runs the FastAPI application
+uvicorn[standard]
+
+# Loads secrets from a .env file into environment variables
+python-dotenv
