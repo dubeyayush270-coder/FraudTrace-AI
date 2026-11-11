@@ -1,0 +1,6 @@
+/*
+  FraudTrace AI — Global Styles
+  Tailwind CSS v4: a single @import is all that is needed.
+  Tailwind automatically scans all .tsx/.ts files for utility classes.
+*/
+@import "tailwindcss";
