@@ -19,18 +19,77 @@ from app.database import get_db
 from app.models import Evidence, Investigation, Transaction
 from app.schemas import (
     EvidenceResponse,
+    FeatureDeviationResponse,
     InvestigationResponse,
+    MLAnomalyResponse,
     TransactionAnalyzeRequest,
     TransactionAnalyzeResponse,
     TransactionDetailResponse,
     TransactionListResponse,
     TransactionResponse,
 )
+from app.services.ml_anomaly_detector import (
+    MLAnomalyAssessment,
+    _unavailable_assessment,
+    evaluate_transaction_anomaly,
+)
 from app.services.risk_engine import analyze_transaction_risk, ensure_utc
 
 logger = logging.getLogger("fraudtrace.transactions")
 
 router = APIRouter(prefix="/api/v1/transactions", tags=["transactions"])
+
+
+def _to_ml_anomaly_response(assessment: MLAnomalyAssessment) -> MLAnomalyResponse:
+    return MLAnomalyResponse(
+        available=assessment.available,
+        status=assessment.status,
+        experimental=assessment.experimental,
+        model_name=assessment.model_name,
+        random_state=assessment.random_state,
+        is_anomaly=assessment.is_anomaly,
+        decision_score=assessment.decision_score,
+        score_interpretation=assessment.score_interpretation,
+        training_sample_count=assessment.training_sample_count,
+        minimum_samples_required=assessment.minimum_samples_required,
+        features_used=assessment.features_used,
+        feature_deviations=[
+            FeatureDeviationResponse(
+                feature_name=dev.feature_name,
+                display_label=dev.display_label,
+                target_value=dev.target_value,
+                training_mean=dev.training_mean,
+                training_std=dev.training_std,
+                z_score_deviation=dev.z_score_deviation,
+                summary=dev.summary,
+            )
+            for dev in assessment.feature_deviations
+        ],
+        explanation=assessment.explanation,
+        methodology_note=assessment.methodology_note,
+        limitations=assessment.limitations,
+    )
+
+
+def _build_ml_anomaly_response(
+    db: Session,
+    txn: Transaction,
+) -> MLAnomalyResponse:
+    """Computes experimental ML anomaly metadata without disrupting deterministic APIs."""
+    try:
+        assessment = evaluate_transaction_anomaly(db=db, target_transaction=txn)
+        return _to_ml_anomaly_response(assessment)
+    except Exception:
+        logger.warning(
+            "Unable to compute experimental ML anomaly response for transaction id=%s",
+            getattr(txn, "id", None),
+            exc_info=True,
+        )
+        return _to_ml_anomaly_response(
+            _unavailable_assessment(
+                "Experimental ML anomaly evaluation failed safely; deterministic rules remain active."
+            )
+        )
 
 
 @router.post(
@@ -165,6 +224,8 @@ def analyze_transaction(
         evidences=evidence_responses,
     )
 
+    ml_anomaly = _build_ml_anomaly_response(db=db, txn=transaction)
+
     return TransactionAnalyzeResponse(
         transaction=TransactionResponse.model_validate(transaction),
         risk_score=analysis.risk_score,
@@ -173,6 +234,7 @@ def analyze_transaction(
         investigation=investigation_response,
         evidence=evidence_responses,
         explanation=analysis.summary,
+        ml_anomaly=ml_anomaly,
     )
 
 
@@ -236,4 +298,7 @@ def get_transaction_detail(
             detail=f"Transaction with ID {transaction_id} not found.",
         )
 
-    return TransactionDetailResponse.model_validate(txn)
+    detail = TransactionDetailResponse.model_validate(txn)
+    return detail.model_copy(
+        update={"ml_anomaly": _build_ml_anomaly_response(db=db, txn=txn)}
+    )

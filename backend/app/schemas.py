@@ -6,7 +6,7 @@ Pydantic schemas for data validation, serialization, and OpenAPI documentation.
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -77,6 +77,36 @@ class TransactionResponse(BaseModel):
     created_at: datetime
 
 
+class FeatureDeviationResponse(BaseModel):
+    """Descriptive statistical feature deviation relative to prior causal history."""
+    feature_name: str
+    display_label: str
+    target_value: float
+    training_mean: float
+    training_std: float
+    z_score_deviation: Optional[float] = None
+    summary: str
+
+
+class MLAnomalyResponse(BaseModel):
+    """Experimental IsolationForest outlier metadata (never a fraud probability)."""
+    available: bool
+    status: str
+    experimental: bool = True
+    model_name: str
+    random_state: int
+    is_anomaly: Optional[bool] = None
+    decision_score: Optional[float] = None
+    score_interpretation: str
+    training_sample_count: int
+    minimum_samples_required: int
+    features_used: list[str] = []
+    feature_deviations: list[FeatureDeviationResponse] = []
+    explanation: str
+    methodology_note: str
+    limitations: str
+
+
 class TransactionAnalyzeResponse(BaseModel):
     """Complete analysis outcome returned to client upon evaluating a transaction."""
     transaction: TransactionResponse
@@ -86,11 +116,13 @@ class TransactionAnalyzeResponse(BaseModel):
     investigation: Optional[InvestigationResponse] = None
     evidence: list[EvidenceResponse] = []
     explanation: str
+    ml_anomaly: Optional[MLAnomalyResponse] = None
 
 
 class TransactionDetailResponse(TransactionResponse):
     """Detailed transaction response including full investigation history and evidence."""
     investigations: list[InvestigationResponse] = []
+    ml_anomaly: Optional[MLAnomalyResponse] = None
 
 
 class TransactionListResponse(BaseModel):
@@ -147,6 +179,85 @@ class AccountNetworkResponse(BaseModel):
 class NetworkPatternListResponse(BaseModel):
     """Paginated list of detected suspicious network patterns."""
     items: list[NetworkPatternResponse]
+    total: int
+    limit: int
+    offset: int
+
+
+# ---------------------------------------------------------------------------
+# Invoice Investigation Schemas
+# ---------------------------------------------------------------------------
+
+class ExtractedFieldResponse(BaseModel):
+    """Preserves original extracted value separately from user-supplied correction."""
+    field_name: str
+    extracted_value: Optional[str] = None
+    corrected_value: Optional[str] = None
+    effective_value: Optional[str] = None
+    extraction_status: str
+    confidence: str
+
+
+class InvoiceFindingResponse(BaseModel):
+    """Deterministic finding emitted by the invoice investigation engine."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: Optional[int] = None
+    finding_code: str
+    severity: str
+    explanation: str
+    supporting_values: dict[str, Any] = {}
+    created_at: Optional[datetime] = None
+
+
+class InvoiceSummaryResponse(BaseModel):
+    """Summary metadata and assessment status for a persisted invoice."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    submission_reference: Optional[str] = None
+    original_filename: str
+    file_type: str
+    file_size_bytes: int
+    page_count: Optional[int] = None
+    ocr_available: bool
+    vendor_name: Optional[str] = None
+    normalized_vendor_name: Optional[str] = None
+    invoice_number: Optional[str] = None
+    normalized_invoice_number: Optional[str] = None
+    invoice_date: Optional[str] = None
+    due_date: Optional[str] = None
+    currency: Optional[str] = None
+    subtotal: Optional[Decimal] = None
+    tax: Optional[Decimal] = None
+    total_amount: Optional[Decimal] = None
+    po_number: Optional[str] = None
+    extraction_status: str
+    investigation_status: str
+    summary: Optional[str] = None
+    findings_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+
+class InvoiceDetailResponse(InvoiceSummaryResponse):
+    """Full invoice investigation detail including per-field statuses and findings."""
+    extraction_note: Optional[str] = None
+    fields: list[ExtractedFieldResponse] = []
+    findings: list[InvoiceFindingResponse] = []
+
+
+class InvoiceAnalyzeResponse(BaseModel):
+    """Response payload returned after uploading and analyzing an invoice."""
+    invoice: InvoiceSummaryResponse
+    fields: list[ExtractedFieldResponse] = []
+    findings: list[InvoiceFindingResponse] = []
+    extraction_note: str
+
+
+class InvoiceListResponse(BaseModel):
+    """Paginated invoice investigation history."""
+    items: list[InvoiceSummaryResponse]
     total: int
     limit: int
     offset: int

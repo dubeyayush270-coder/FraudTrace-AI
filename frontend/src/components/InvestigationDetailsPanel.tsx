@@ -18,6 +18,7 @@ import {
   getRiskBarColor,
   getStatusBadgeClasses,
 } from '../utils/formatters'
+import { MLAnomalyCard } from './MLAnomalyCard'
 
 interface InvestigationDetailsPanelProps {
   detail: TransactionDetailResponse | null
@@ -212,6 +213,9 @@ export default function InvestigationDetailsPanel({
               </p>
             </div>
           </div>
+
+          {/* Experimental ML Anomaly Intelligence (strictly separate from deterministic rules) */}
+          <MLAnomalyCard mlAnomaly={detail.ml_anomaly} />
 
           {/* Evidence & Network Context side by side */}
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">

@@ -7,6 +7,9 @@ import type {
   AccountNetworkResponse,
   DatabaseHealthResponse,
   HealthResponse,
+  InvoiceAnalyzeResponse,
+  InvoiceDetailResponse,
+  InvoiceListResponse,
   NetworkOverviewResponse,
   NetworkPatternListResponse,
   TransactionAnalyzeRequest,
@@ -74,7 +77,9 @@ async function requestJson<T>(
     response = await fetch(`${API_BASE_URL}${path}`, {
       headers: {
         Accept: 'application/json',
-        ...(options?.body ? { 'Content-Type': 'application/json' } : {}),
+        ...(options?.body && !(options.body instanceof FormData)
+          ? { 'Content-Type': 'application/json' }
+          : {}),
         ...options?.headers,
       },
       ...options,
@@ -169,4 +174,48 @@ export async function fetchAccountNetwork(
 ): Promise<AccountNetworkResponse> {
   const encoded = encodeURIComponent(accountId.trim())
   return requestJson<AccountNetworkResponse>(`/api/v1/network/accounts/${encoded}`)
+}
+
+export async function analyzeInvoice(
+  file: File,
+  options?: {
+    submissionReference?: string
+    rejectDuplicates?: boolean
+    corrections?: Record<string, string>
+  },
+): Promise<InvoiceAnalyzeResponse> {
+  const formData = new FormData()
+  formData.append('file', file)
+
+  if (options?.submissionReference?.trim()) {
+    formData.append('submission_reference', options.submissionReference.trim())
+  }
+  if (options?.rejectDuplicates !== undefined) {
+    formData.append('reject_duplicates', String(options.rejectDuplicates))
+  }
+  if (options?.corrections && Object.keys(options.corrections).length > 0) {
+    formData.append('corrections_json', JSON.stringify(options.corrections))
+  }
+
+  return requestJson<InvoiceAnalyzeResponse>('/api/v1/invoices/analyze', {
+    method: 'POST',
+    body: formData,
+  })
+}
+
+export async function fetchInvoices(
+  limit = 20,
+  offset = 0,
+): Promise<InvoiceListResponse> {
+  const params = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset),
+  })
+  return requestJson<InvoiceListResponse>(`/api/v1/invoices?${params.toString()}`)
+}
+
+export async function fetchInvoiceDetail(
+  invoiceId: number,
+): Promise<InvoiceDetailResponse> {
+  return requestJson<InvoiceDetailResponse>(`/api/v1/invoices/${invoiceId}`)
 }

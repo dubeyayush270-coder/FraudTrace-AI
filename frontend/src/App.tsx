@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import HealthStatus from './components/HealthStatus'
 import InvestigationDetailsPanel from './components/InvestigationDetailsPanel'
+import InvoiceInvestigationPanel from './components/InvoiceInvestigationPanel'
 import NetworkGraphPanel from './components/NetworkGraphPanel'
 import {
   AccountNetworkInspector,
@@ -33,7 +34,7 @@ import type {
   TransactionResponse,
 } from './types/api'
 
-type WorkspaceTab = 'all' | 'transactions' | 'network'
+type WorkspaceTab = 'all' | 'transactions' | 'network' | 'invoices'
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('all')
@@ -309,6 +310,7 @@ export default function App() {
 
   const showTransactionsSection = activeTab === 'all' || activeTab === 'transactions'
   const showNetworkSection = activeTab === 'all' || activeTab === 'network'
+  const showInvoicesSection = activeTab === 'all' || activeTab === 'invoices'
 
   return (
     <div className="min-h-screen bg-[#070B14] text-slate-100">
@@ -346,6 +348,7 @@ export default function App() {
                   { id: 'all', label: 'Full Workspace' },
                   { id: 'transactions', label: 'Transactions & Risk' },
                   { id: 'network', label: 'Network & Graph' },
+                  { id: 'invoices', label: 'Invoices' },
                 ] as const
               ).map((tab) => (
                 <button
@@ -489,6 +492,9 @@ export default function App() {
             />
           </div>
         )}
+
+        {/* Band 3: Invoice Document Upload, Extraction & Findings */}
+        {showInvoicesSection && <InvoiceInvestigationPanel />}
       </main>
     </div>
   )

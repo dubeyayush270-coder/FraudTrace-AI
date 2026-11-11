@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -126,4 +126,94 @@ class Evidence(Base):
         return (
             f"<Evidence(id={self.id}, inv_id={self.investigation_id}, "
             f"type='{self.evidence_type}', severity='{self.severity}')>"
+        )
+
+
+class Invoice(Base):
+    """
+    Invoice Model
+    -------------
+    Stores sanitized invoice metadata, extraction outcomes, separated user
+    corrections metadata, and investigative review status. Original uploaded
+    document bytes are never stored.
+    """
+    __tablename__ = "invoices"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    submission_reference: Mapped[Optional[str]] = mapped_column(
+        String(128), unique=True, index=True, nullable=True
+    )
+    original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    file_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    file_size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    page_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    ocr_available: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    vendor_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    normalized_vendor_name: Mapped[Optional[str]] = mapped_column(
+        String(255), index=True, nullable=True
+    )
+    invoice_number: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    normalized_invoice_number: Mapped[Optional[str]] = mapped_column(
+        String(128), index=True, nullable=True
+    )
+    invoice_date: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    due_date: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    currency: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+
+    subtotal: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 2), nullable=True)
+    tax: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 2), nullable=True)
+    total_amount: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 2), nullable=True)
+    po_number: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+
+    extraction_status: Mapped[str] = mapped_column(String(64), nullable=False)
+    investigation_status: Mapped[str] = mapped_column(String(64), nullable=False)
+    summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    field_metadata_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )
+
+    findings: Mapped[list["InvoiceFinding"]] = relationship(
+        back_populates="invoice", cascade="all, delete-orphan"
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<Invoice(id={self.id}, filename='{self.original_filename}', "
+            f"vendor='{self.vendor_name}', invoice_number='{self.invoice_number}', "
+            f"status='{self.investigation_status}')>"
+        )
+
+
+class InvoiceFinding(Base):
+    """
+    InvoiceFinding Model
+    --------------------
+    Stores deterministic invoice investigation findings tied to an Invoice record.
+    """
+    __tablename__ = "invoice_findings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    invoice_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("invoices.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    finding_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    severity: Mapped[str] = mapped_column(String(32), default="MEDIUM", nullable=False)
+    explanation: Mapped[str] = mapped_column(Text, nullable=False)
+    supporting_values: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+
+    invoice: Mapped["Invoice"] = relationship(back_populates="findings")
+
+    def __repr__(self) -> str:
+        return (
+            f"<InvoiceFinding(id={self.id}, invoice_id={self.invoice_id}, "
+            f"code='{self.finding_code}', severity='{self.severity}')>"
         )

@@ -16,6 +16,7 @@ import {
   getRiskBarColor,
   getStatusBadgeClasses,
 } from '../utils/formatters'
+import { MLAnomalyCard } from './MLAnomalyCard'
 
 interface TransactionAnalyzeFormProps {
   onAnalyzed: (result: TransactionAnalyzeResponse) => Promise<void> | void
@@ -326,6 +327,10 @@ export default function TransactionAnalyzeForm({
               ))}
             </div>
           )}
+
+          <div className="mt-3">
+            <MLAnomalyCard mlAnomaly={latestResult.ml_anomaly} compact />
+          </div>
 
           <div className="mt-3 flex flex-wrap gap-2 border-t border-slate-700/60 pt-3">
             <button

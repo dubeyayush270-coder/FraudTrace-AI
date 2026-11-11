@@ -27,6 +27,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.database import get_db, init_db
+from app.routes.invoices import router as invoices_router
 from app.routes.network import router as network_router
 from app.routes.transactions import router as transactions_router
 
@@ -86,6 +87,7 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 app.include_router(transactions_router)
 app.include_router(network_router)
+app.include_router(invoices_router)
 
 
 # ---------------------------------------------------------------------------
