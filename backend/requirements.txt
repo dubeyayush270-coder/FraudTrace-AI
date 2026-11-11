@@ -10,3 +10,12 @@ uvicorn[standard]
 
 # Loads secrets from a .env file into environment variables
 python-dotenv
+
+# Database ORM for SQLite / Relational databases
+sqlalchemy>=2.0.0
+
+# HTTP client for testing and PayPal integrations
+httpx>=0.27.0
+
+# Graph analysis for fraud network detection
+networkx>=3.0

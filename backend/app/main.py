@@ -11,12 +11,38 @@ Run the server with:
     uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 
 Then visit:
-    http://127.0.0.1:8000/health    → health check response
-    http://127.0.0.1:8000/docs      → interactive API documentation (auto-generated)
+    http://127.0.0.1:8000/health                  → core health check response
+    http://127.0.0.1:8000/health/database         → database connectivity health check
+    http://127.0.0.1:8000/api/v1/transactions     → transaction risk intelligence APIs
+    http://127.0.0.1:8000/api/v1/network          → fraud network intelligence APIs
+    http://127.0.0.1:8000/docs                    → interactive API documentation (auto-generated)
 """
 
-from fastapi import FastAPI
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
+
+from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+
+from app.database import get_db, init_db
+from app.routes.network import router as network_router
+from app.routes.transactions import router as transactions_router
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
+    """
+    FastAPI Lifespan Context Manager.
+    Runs startup tasks before the application accepts requests,
+    and runs shutdown tasks when the application stops.
+    """
+    # Startup: Safely create database tables if they do not exist yet.
+    init_db()
+    yield
+    # Shutdown: Clean up any standing resources if needed.
+
 
 # ---------------------------------------------------------------------------
 # Application instance
@@ -28,6 +54,7 @@ app = FastAPI(
     title="FraudTrace AI",
     version="0.1.0",
     description="Explainable fraud intelligence platform.",
+    lifespan=lifespan,
 )
 
 # ---------------------------------------------------------------------------
@@ -40,9 +67,6 @@ app = FastAPI(
 #
 # CORSMiddleware adds the right HTTP headers to tell the browser:
 # "It is safe for http://localhost:5173 to read my responses."
-#
-# We use an explicit origin list (not "*") so we never accidentally
-# allow unknown origins in production.
 
 ALLOWED_ORIGINS: list[str] = [
     "http://localhost:5173",  # Vite React development server
@@ -58,7 +82,14 @@ app.add_middleware(
 
 
 # ---------------------------------------------------------------------------
-# Routes
+# API Routers
+# ---------------------------------------------------------------------------
+app.include_router(transactions_router)
+app.include_router(network_router)
+
+
+# ---------------------------------------------------------------------------
+# Health Routes
 # ---------------------------------------------------------------------------
 
 @app.get("/health")
@@ -67,12 +98,30 @@ def health_check() -> dict[str, str]:
     Health Check
 
     Returns a simple OK response to confirm the server is running and reachable.
-
-    This endpoint is used by:
-    - The frontend to verify the backend is online before making real requests.
-    - Monitoring tools to check server availability.
+    Preserved for frontend connection check compatibility.
 
     Returns:
         dict: A dictionary with a single key "status" set to "ok".
     """
     return {"status": "ok"}
+
+
+@app.get("/health/database")
+def database_health_check(db: Session = Depends(get_db)) -> dict[str, str]:
+    """
+    Database Health Check
+
+    Verifies active connection to the SQLite database by running a lightweight query.
+
+    Returns:
+        dict: {"status": "ok", "database": "connected"} on success.
+        HTTP 503 with {"detail": "Database service unavailable"} on failure.
+    """
+    try:
+        db.execute(text("SELECT 1"))
+        return {"status": "ok", "database": "connected"}
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database service unavailable",
+        )
