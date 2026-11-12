@@ -26,6 +26,7 @@ interface InvestigationDetailsPanelProps {
   isLoading: boolean
   error: string | null
   onInspectAccount: (accountId: string) => void
+  onAskAssistant?: (transactionId: number, investigationId: number | null) => void
 }
 
 export default function InvestigationDetailsPanel({
@@ -34,6 +35,7 @@ export default function InvestigationDetailsPanel({
   isLoading,
   error,
   onInspectAccount,
+  onAskAssistant,
 }: InvestigationDetailsPanelProps) {
   const relevantPatterns = useMemo(() => {
     if (!detail) return []
@@ -68,6 +70,15 @@ export default function InvestigationDetailsPanel({
 
         {detail && (
           <div className="flex flex-wrap items-center gap-2">
+            {onAskAssistant && (
+              <button
+                type="button"
+                onClick={() => onAskAssistant(detail.id, primaryInvestigation?.id ?? null)}
+                className="rounded-md border border-sky-500/40 bg-sky-500/15 px-2.5 py-1 text-xs font-medium text-sky-300 transition hover:bg-sky-500/25"
+              >
+                Ask AI about Txn #{detail.id}
+              </button>
+            )}
             <button
               type="button"
               onClick={() => onInspectAccount(detail.sender_id)}

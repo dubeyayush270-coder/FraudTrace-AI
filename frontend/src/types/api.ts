@@ -208,3 +208,41 @@ export interface InvoiceListResponse {
   limit: number
   offset: number
 }
+
+export interface AssistantChatRequest {
+  message: string
+  transaction_id?: number
+  investigation_id?: number
+  invoice_id?: number
+  account_id?: string
+}
+
+export interface AssistantCitation {
+  citation_id: string
+  record_type: string
+  record_id: string
+  label: string
+  claim: string
+  excerpt: string
+}
+
+export interface AssistantChatResponse {
+  answer: string
+  citations: AssistantCitation[]
+  suggested_questions: string[]
+  limitations: string[]
+  provider: string
+  model: string
+  request_id: string
+}
+
+export interface AssistantStatusResponse {
+  enabled: boolean
+  ready: boolean
+  provider: string
+  model: string
+  data_classification: string
+  privacy_policy_ok: boolean
+  status_code: string
+  message: string
+}

@@ -19,7 +19,8 @@ FraudTrace AI combines transaction-level rule evaluation with network-wide relat
 - **Persistent Investigation Ledger**: Stores `Transaction`, `Investigation`, `Evidence`, `Invoice`, and `InvoiceFinding` records atomically in SQLite using SQLAlchemy 2.x with `Numeric(18, 2)` monetary precision and enforced foreign-key integrity (`PRAGMA foreign_keys=ON`).
 - **Fraud Network Intelligence**: Builds a NetworkX directed multi-graph (`MultiDiGraph`) across transaction history to detect structural investigation leads (`HIGH_VOLUME_RECEIVER`, `RAPID_FUND_MOVEMENT`, `SHARED_RECEIVER`) and 1–2 hop account neighborhoods.
 - **Invoice Investigation**: Validates `PDF` (up to `5` pages), `PNG`, and `JPG`/`JPEG` uploads (`10 MB` cap), extracts structured fields cleanly via `PyMuPDF` + `Pillow` (reporting `OCR_UNAVAILABLE` honestly when Tesseract is absent), preserves separated extracted vs. user-corrected fields, and executes deterministic duplicate, arithmetic, date, and completeness checks.
-- **Dark-Navy Investigation Dashboard**: Interactive React + TypeScript + Tailwind CSS v4 console featuring live API/DB health telemetry, KPI summaries, real-time transaction submission and duplicate reference rejection (`409 Conflict`), filterable ledger triage, detailed evidence panels, an interactive directed SVG network graph, account lookup (`1–2` hop connections), and an **Invoices** investigation workspace tab.
+- **Evidence-Grounded AI Investigation Assistant**: Optional, stateless read-only copilot (`POST /api/v1/assistant/chat`, `GET /api/v1/assistant/status`) built behind a provider-independent `AIProvider` interface with Google Gemini as the primary provider (code default `gemini-3.8-flash`, overridable via `GEMINI_MODEL`, e.g., `gemini-3.7-flash` used in live testing) and optional Groq (`openai/gpt-oss-20b`) single fallback on Gemini HTTP `503` or `ReadTimeout`. Retrieves scoped transaction, ML, network, invoice, and cross-investigation records, pseudonymizes accounts/vendors and strips PII/secrets before outbound requests, blocks prompt-injection/mutation attempts, validates returned citation IDs strictly against retrieved records, preserves in-memory conversation state across dashboard tabs (with **Clear Conversation** reset), and runs safely with `AI_ENABLED=false` when no API key is configured.
+- **Dark-Navy Investigation Dashboard**: Interactive React + TypeScript + Tailwind CSS v4 console featuring live API/DB health telemetry, KPI summaries, real-time transaction submission and duplicate reference rejection (`409 Conflict`), filterable ledger triage, detailed evidence panels, an interactive directed SVG network graph, account lookup (`1–2` hop connections), an **Invoices** workspace tab, and an **AI Assistant** workspace tab with contextual entry points.
 - **Repeatable Demo Seeding**: Dedicated CLI seeder (`backend/seed_demo_data.py`) submitting timestamped demo flows through the public analysis endpoint without duplicate reference collisions.
 
 ---
@@ -130,6 +131,66 @@ Base URL (local default): `http://127.0.0.1:8000` (interactive OpenAPI docs at `
 | `POST` | `/api/v1/invoices/analyze` | Validate multipart invoice upload (`PDF`/`PNG`/`JPG`), extract fields, run deterministic rules, and persist (`201`, or `409`/`413`/`415`/`422`) |
 | `GET` | `/api/v1/invoices` | Paginated persisted invoice investigation summaries newest-first (`limit`, `offset`) |
 | `GET` | `/api/v1/invoices/{invoice_id}` | Full invoice metadata, extracted vs. corrected field breakdown, and deterministic findings (`404` if missing) |
+| `POST` | `/api/v1/paypal/orders` | Create (or idempotently retrieve by `internal_reference`) a PayPal Sandbox `CAPTURE` order and persist `PayPalOrder` (`201`/`200`, or `409`/`422`/`502`/`503`) |
+| `POST` | `/api/v1/paypal/orders/{order_id}/capture` | Verify PayPal Sandbox `APPROVED` status, capture idempotently, validate amount/currency parity, and score through the FraudTrace risk engine (`200`, or `404`/`409`/`422`/`502`/`503`) |
+| `GET` | `/api/v1/assistant/status` | Non-sensitive AI assistant enablement, model, and data-classification readiness status (`200`) |
+| `POST` | `/api/v1/assistant/chat` | Stateless, evidence-grounded explanation over sanitized investigation context (`200`, or `403`/`404`/`422`/`429`/`502`/`503`/`504`) |
+
+---
+
+## AI Investigation Assistant Configuration & Privacy
+
+The AI Investigation Assistant is **disabled by default** (`AI_ENABLED=false`) so the core platform runs cleanly without any external API key or cloud calls.
+
+### Enabling Google Gemini
+
+Add the following variables to `backend/.env` (see [`backend/.env.example`](backend/.env.example); never commit `.env`):
+
+```env
+AI_ENABLED=true
+AI_PROVIDER=gemini
+GEMINI_API_KEY=your_gemini_api_key_here
+# Implementation default in ai_provider.py is gemini-3.8-flash;
+# live latency/fallback verification used override gemini-3.7-flash:
+GEMINI_MODEL=gemini-3.8-flash
+# Optional Groq fallback (triggered ONLY if Gemini returns HTTP 503 or ReadTimeout;
+# other errors and ConnectTimeout/WriteTimeout/PoolTimeout do not trigger fallback):
+GROQ_API_KEY=
+GROQ_MODEL=openai/gpt-oss-20b
+AI_REQUEST_TIMEOUT_SECONDS=30
+AI_MAX_OUTPUT_TOKENS=1500
+AI_DATA_CLASSIFICATION=synthetic_demo
+AI_ALLOW_EXTERNAL_NON_DEMO=false
+```
+
+### PayPal Sandbox Environment Variables (Backend Only)
+
+To test `POST /api/v1/paypal/orders` and `POST /api/v1/paypal/orders/{order_id}/capture` against PayPal Sandbox, set Sandbox-only credentials in `backend/.env` (never expose these in `frontend/` or commit `.env`):
+
+```env
+PAYPAL_CLIENT_ID=your_sandbox_client_id
+PAYPAL_CLIENT_SECRET=your_sandbox_client_secret
+PAYPAL_BASE_URL=https://api-m.sandbox.paypal.com
+```
+
+### Supported Contexts & Request Example
+
+`POST /api/v1/assistant/chat` accepts `message` (`1–2000` chars) and optional scope selectors (`transaction_id`, `investigation_id`, `invoice_id`, `account_id`) to target Transaction + ML, Network (1–2 hops + leads), Invoice (sanitized fields, corrections, findings, OCR limits), or Cross-Investigation context:
+
+```json
+{
+  "message": "Why was transaction #16 flagged and what should an investigator check next?",
+  "transaction_id": 16
+}
+```
+
+The response returns `answer`, verified `citations` (any fabricated citation IDs returned by the model are stripped and disclosed), `suggested_questions`, `limitations`, `provider`, `model`, and `request_id`.
+
+### Privacy & Free-Tier Gemini Restrictions
+
+- **Synthetic/Demo Gate**: Outbound LLM requests are restricted by default to `AI_DATA_CLASSIFICATION=synthetic_demo`. Setting `production` or `unclassified` blocks external calls (`403`) unless `AI_ALLOW_EXTERNAL_NON_DEMO=true` is explicitly configured.
+- **Sanitization & Pseudonymization**: Raw DB rows, uploaded invoice documents/text, OAuth/API secrets, emails, phone numbers, street addresses, and personal names are removed/redacted before prompt assembly, and accounts/vendors are pseudonymized (`ACCT_01`, `VENDOR_01`).
+- **Gemini Free-Tier Notice**: Google Gemini API free-tier requests may be logged/used by Google to improve its products under Google's terms. **Never** submit real customer PII, unredacted financial documents, or confidential production records when using the free tier.
 
 ---
 
@@ -215,8 +276,12 @@ backend\.venv\Scripts\python.exe -u backend\test_risk_engine_and_api.py
 backend\.venv\Scripts\python.exe -u backend\test_fraud_network.py
 backend\.venv\Scripts\python.exe -u backend\test_ml_anomaly.py
 backend\.venv\Scripts\python.exe -u backend\test_invoice_investigation.py
+backend\.venv\Scripts\python.exe backend\test_paypal_sandbox_oauth.py --offline-only
+backend\.venv\Scripts\python.exe -u backend\test_paypal_orders.py
+backend\.venv\Scripts\python.exe -u backend\test_assistant.py
 
-# Frontend TypeScript check, production build & linter
+# Frontend tests, TypeScript check, production build & linter
+npm.cmd --prefix frontend run test
 npm.cmd --prefix frontend run build
 npm.cmd --prefix frontend run lint
 ```
@@ -225,7 +290,8 @@ npm.cmd --prefix frontend run lint
 
 ## Current Limitations
 
-- **Experimental Unsupervised ML Only**: The `IsolationForest` anomaly check is trained on small local database history without fraud labels, hyperparameter cross-validation, or FX normalization across currencies. It provides exploratory outlier leads only and has **not** been statistically validated for production accuracy. LLM narrative generation and PayPal Sandbox webhook integration remain out of scope for this milestone.
+- **Experimental Unsupervised ML Only**: The `IsolationForest` anomaly check is trained on small local database history without fraud labels, hyperparameter cross-validation, or FX normalization across currencies. It provides exploratory outlier leads only and has **not** been statistically validated for production accuracy. Frontend PayPal checkout buttons and PayPal Sandbox webhook verification remain out of scope (only backend PayPal Sandbox OAuth2 and Orders v2 order creation/capture are integrated).
+- **Stateless AI Assistant**: The AI Investigation Assistant is an optional, stateless read-only explanation layer grounded in sanitized records; it requires `AI_ENABLED=true` and `GEMINI_API_KEY` for live LLM responses, cannot execute queries or modify cases/payments, and shares the underlying OCR/sample-size limits of the retrieved FraudTrace modules.
 - **External Tesseract Prerequisite for Scanned Invoices**: Text-based PDFs extract natively via `PyMuPDF`, whereas `PNG`/`JPG` images and scanned image-only PDFs require an external host `tesseract` executable (`Tesseract-OCR`) for OCR. On systems without Tesseract installed (including the current Windows environment), the backend reports `OCR_UNAVAILABLE` and `INCOMPLETE_EXTRACTION` honestly instead of performing OCR; reviewers can inspect files manually or supply explicit field corrections cleanly.
 - **On-Demand In-Memory Graph**: NetworkX graphs are rebuilt per `/api/v1/network/*` request from SQLite transactions; suitable for hackathon/prototype volumes rather than million-edge streaming graphs.
 - **Local Single-Origin Configuration**: CORS is configured strictly for `http://localhost:5173`, with no user authentication or role-based access control enabled yet.

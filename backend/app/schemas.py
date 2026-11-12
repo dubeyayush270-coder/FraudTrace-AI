@@ -10,6 +10,11 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.services.paypal_client import (
+    get_allowed_paypal_redirect_hosts,
+    validate_paypal_redirect_url,
+)
+
 
 class TransactionAnalyzeRequest(BaseModel):
     """Payload for submitting and evaluating a transaction."""
@@ -261,3 +266,266 @@ class InvoiceListResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+# ---------------------------------------------------------------------------
+# PayPal Sandbox Orders v2 Integration Schemas
+# ---------------------------------------------------------------------------
+
+SUPPORTED_PAYPAL_CURRENCIES = frozenset({"USD", "EUR", "GBP", "CAD", "AUD", "CHF", "SGD"})
+MAX_PAYPAL_ORDER_AMOUNT = Decimal("100000.00")
+
+
+class PayPalOrderCreateRequest(BaseModel):
+    """Validated payload for creating a PayPal Sandbox checkout order (intent=CAPTURE)."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    amount: Decimal = Field(
+        ...,
+        ge=Decimal("0.01"),
+        le=MAX_PAYPAL_ORDER_AMOUNT,
+        description="Positive payment amount (0.01 to 100000.00, max 2 decimal places)",
+    )
+    currency: str = Field(
+        default="USD",
+        min_length=3,
+        max_length=3,
+        description="Supported 3-letter ISO currency code",
+    )
+    internal_reference: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=64,
+        description="Optional idempotency / internal trace reference",
+    )
+    sender_id: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        description="Optional internal sender account identifier for FraudTrace evaluation",
+    )
+    receiver_id: str = Field(
+        default="FRAUDTRACE_SANDBOX_MERCHANT",
+        min_length=1,
+        max_length=128,
+        description="Recipient merchant/account identifier for FraudTrace evaluation",
+    )
+    return_url: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=2048,
+        description="Optional validated buyer approval return URL (defaults to configured local dev URL)",
+    )
+    cancel_url: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=2048,
+        description="Optional validated buyer checkout cancel URL (defaults to configured local dev URL)",
+    )
+
+    @field_validator("amount")
+    @classmethod
+    def validate_amount_scale(cls, v: Decimal) -> Decimal:
+        if not v.is_finite():
+            raise ValueError("Amount must be a finite decimal number.")
+        exponent = v.as_tuple().exponent
+        if isinstance(exponent, int) and exponent < -2:
+            raise ValueError("Amount cannot have more than 2 decimal places.")
+        return v.quantize(Decimal("0.01"))
+
+    @field_validator("currency")
+    @classmethod
+    def validate_supported_currency(cls, v: str) -> str:
+        clean = v.strip().upper()
+        if len(clean) != 3 or not clean.isalpha() or clean not in SUPPORTED_PAYPAL_CURRENCIES:
+            supported = ", ".join(sorted(SUPPORTED_PAYPAL_CURRENCIES))
+            raise ValueError(f"Unsupported currency '{clean}'. Supported currencies: {supported}.")
+        return clean
+
+    @field_validator("internal_reference")
+    @classmethod
+    def validate_internal_reference(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        clean = v.strip()
+        if not clean:
+            raise ValueError("internal_reference cannot be blank.")
+        if not all(ch.isalnum() or ch in "_-" for ch in clean):
+            raise ValueError("internal_reference may only contain letters, digits, hyphens, and underscores.")
+        return clean
+
+    @field_validator("sender_id")
+    @classmethod
+    def validate_sender_id(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        clean = v.strip()
+        if not clean:
+            raise ValueError("sender_id cannot be blank.")
+        return clean
+
+    @field_validator("receiver_id")
+    @classmethod
+    def validate_receiver_id(cls, v: str) -> str:
+        clean = v.strip()
+        if not clean:
+            raise ValueError("receiver_id cannot be blank.")
+        return clean
+
+    @field_validator("return_url", "cancel_url")
+    @classmethod
+    def validate_redirect_urls(cls, v: Optional[str], info: Any) -> Optional[str]:
+        if v is None:
+            return None
+        allowed_hosts = get_allowed_paypal_redirect_hosts()
+        return validate_paypal_redirect_url(
+            v,
+            field_name=str(getattr(info, "field_name", "redirect_url")),
+            allowed_hosts=allowed_hosts,
+        )
+
+
+class PayPalOrderSummaryResponse(BaseModel):
+    """Non-sensitive persisted PayPal Sandbox order metadata."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    internal_reference: str
+    paypal_order_id: str
+    paypal_capture_id: Optional[str] = None
+    intent: str
+    status: str
+    requested_amount: Decimal
+    captured_amount: Optional[Decimal] = None
+    currency: str
+    sender_id: Optional[str] = None
+    receiver_id: str
+    payer_id: Optional[str] = None
+    approval_url: Optional[str] = None
+    transaction_id: Optional[int] = None
+    created_at: datetime
+    updated_at: datetime
+    captured_at: Optional[datetime] = None
+
+
+class PayPalOrderCreateResponse(BaseModel):
+    """Response returned upon creating or idempotently replaying a PayPal Sandbox order."""
+
+    internal_reference: str
+    paypal_order_id: str
+    status: str
+    intent: str
+    amount: Decimal
+    currency: str
+    approval_url: Optional[str] = None
+    idempotent_replay: bool = False
+    created_at: datetime
+    message: str
+
+
+class PayPalCaptureResponse(BaseModel):
+    """Response returned after capturing an approved PayPal Sandbox order and evaluating FraudTrace risk."""
+
+    paypal_order: PayPalOrderSummaryResponse
+    already_captured: bool = False
+    transaction_analysis: TransactionAnalyzeResponse
+    message: str
+
+
+# ---------------------------------------------------------------------------
+# AI Investigation Assistant Schemas
+# ---------------------------------------------------------------------------
+
+MAX_ASSISTANT_MESSAGE_CHARS = 2000
+
+
+class AssistantChatRequest(BaseModel):
+    """Stateless investigation question scoped to FraudTrace AI records."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    message: str = Field(
+        ...,
+        min_length=1,
+        max_length=MAX_ASSISTANT_MESSAGE_CHARS,
+        description="Investigator question about existing FraudTrace AI records",
+    )
+    transaction_id: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Optional Transaction ID context selector",
+    )
+    investigation_id: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Optional Investigation ID context selector",
+    )
+    invoice_id: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Optional Invoice ID context selector",
+    )
+    account_id: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        description="Optional Account ID context selector",
+    )
+
+    @field_validator("message")
+    @classmethod
+    def validate_message_content(cls, v: str) -> str:
+        clean = v.strip()
+        if not clean:
+            raise ValueError("Assistant question cannot be empty or whitespace only.")
+        if any(ord(ch) < 32 and ch not in ("\n", "\t", "\r") for ch in clean):
+            raise ValueError("Assistant question contains unsupported control characters.")
+        return clean
+
+    @field_validator("account_id")
+    @classmethod
+    def validate_account_id(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        clean = v.strip()
+        if not clean:
+            raise ValueError("account_id cannot be blank.")
+        if any(ord(ch) < 32 for ch in clean):
+            raise ValueError("account_id contains invalid control characters.")
+        return clean
+
+
+class AssistantCitationResponse(BaseModel):
+    """Verified evidence citation referencing a retrieved FraudTrace record."""
+
+    citation_id: str
+    record_type: str
+    record_id: str
+    label: str
+    claim: str
+    excerpt: str
+
+
+class AssistantChatResponse(BaseModel):
+    """Structured, evidence-grounded response returned by POST /api/v1/assistant/chat."""
+
+    answer: str
+    citations: list[AssistantCitationResponse] = []
+    suggested_questions: list[str] = []
+    limitations: list[str] = []
+    provider: str
+    model: str
+    request_id: str
+
+
+class AssistantStatusResponse(BaseModel):
+    """Non-sensitive AI assistant configuration readiness summary."""
+
+    enabled: bool
+    ready: bool
+    provider: str
+    model: str
+    data_classification: str
+    privacy_policy_ok: bool
+    status_code: str
+    message: str

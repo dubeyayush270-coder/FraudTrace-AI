@@ -5,6 +5,9 @@
 
 import type {
   AccountNetworkResponse,
+  AssistantChatRequest,
+  AssistantChatResponse,
+  AssistantStatusResponse,
   DatabaseHealthResponse,
   HealthResponse,
   InvoiceAnalyzeResponse,
@@ -218,4 +221,17 @@ export async function fetchInvoiceDetail(
   invoiceId: number,
 ): Promise<InvoiceDetailResponse> {
   return requestJson<InvoiceDetailResponse>(`/api/v1/invoices/${invoiceId}`)
+}
+
+export async function fetchAssistantStatus(): Promise<AssistantStatusResponse> {
+  return requestJson<AssistantStatusResponse>('/api/v1/assistant/status')
+}
+
+export async function askInvestigationAssistant(
+  payload: AssistantChatRequest,
+): Promise<AssistantChatResponse> {
+  return requestJson<AssistantChatResponse>('/api/v1/assistant/chat', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
 }

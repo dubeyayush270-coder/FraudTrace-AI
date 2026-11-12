@@ -11,7 +11,9 @@ Tests:
 7. Safe 503 error handling on database connection failure.
 """
 
+import os
 import sys
+import tempfile
 from decimal import Decimal
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -19,12 +21,18 @@ from unittest.mock import MagicMock
 # Ensure `backend` is on python path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from fastapi import HTTPException
-from sqlalchemy import inspect, select
-from sqlalchemy.exc import IntegrityError
-from app.database import engine, SessionLocal, init_db
-from app.models import Transaction, Investigation, Evidence
-from app.main import database_health_check
+# Isolate database tests from backend/data/fraudtrace.db
+_temp_db_handle = tempfile.NamedTemporaryFile(suffix="_test_db_layer.db", delete=False)
+_temp_db_path = Path(_temp_db_handle.name).resolve()
+_temp_db_handle.close()
+os.environ["DATABASE_URL"] = f"sqlite:///{_temp_db_path.as_posix()}"
+
+from fastapi import HTTPException  # noqa: E402
+from sqlalchemy import inspect, select  # noqa: E402
+from sqlalchemy.exc import IntegrityError  # noqa: E402
+from app.database import engine, SessionLocal, init_db  # noqa: E402
+from app.models import Transaction, Investigation, Evidence  # noqa: E402
+from app.main import database_health_check  # noqa: E402
 
 TEST_REF = "TXN-AUDIT-TEST-001"
 
@@ -55,7 +63,7 @@ def run_tests() -> None:
     amount_col_type = str(cols["amount"]["type"])
     print(f"Transaction.amount column type: {amount_col_type}")
     assert "NUMERIC" in amount_col_type.upper(), f"Expected NUMERIC, got {amount_col_type}"
-    print("✓ All tables and column types verified.")
+    print("[PASS] All tables and column types verified.")
 
     db = SessionLocal()
     try:
@@ -91,7 +99,7 @@ def run_tests() -> None:
         db.add(sample_txn)
         db.commit()
         db.refresh(sample_txn)
-        print(f"✓ Saved Transaction: ID={sample_txn.id}, Amount={sample_txn.amount} (type={type(sample_txn.amount).__name__})")
+        print(f"[PASS] Saved Transaction: ID={sample_txn.id}, Amount={sample_txn.amount} (type={type(sample_txn.amount).__name__})")
         assert isinstance(sample_txn.amount, Decimal), "Expected Decimal type for amount"
         assert sample_txn.amount == Decimal("14500.00")
 
@@ -108,7 +116,7 @@ def run_tests() -> None:
         assert ev.evidence_type == "VELOCITY_SPIKE"
         assert ev.investigation.id == inv.id
         assert inv.transaction.id == loaded_txn.id
-        print("✓ Bidirectional relationships verified.")
+        print("[PASS] Bidirectional relationships verified.")
 
         print("\n--- 4. Verifying SQLite Foreign Key Enforcement ---")
         orphan_inv = Investigation(
@@ -123,7 +131,7 @@ def run_tests() -> None:
         except IntegrityError:
             db.rollback()
             fk_violation_caught = True
-            print("✓ Foreign-key enforcement verified: SQLite rejected orphan child record.")
+            print("[PASS] Foreign-key enforcement verified: SQLite rejected orphan child record.")
 
         assert fk_violation_caught, "Expected IntegrityError when inserting invalid foreign key!"
 
@@ -141,7 +149,7 @@ def run_tests() -> None:
         rem_ev = db.execute(select(Evidence).where(Evidence.id == ev_id)).scalar_one_or_none()
         assert rem_inv is None, "Investigation should have been deleted by cascade!"
         assert rem_ev is None, "Evidence should have been deleted by cascade!"
-        print("✓ Cascade deletion verified: child Investigation and Evidence deleted with parent.")
+        print("[PASS] Cascade deletion verified: child Investigation and Evidence deleted with parent.")
 
     finally:
         # Guarantee no test data remains
@@ -157,10 +165,18 @@ def run_tests() -> None:
     except HTTPException as exc:
         assert exc.status_code == 503, f"Expected 503, got {exc.status_code}"
         assert exc.detail == "Database service unavailable", f"Unexpected error detail: {exc.detail}"
-        print(f"✓ Safe 503 response verified: HTTP {exc.status_code} — detail: '{exc.detail}'")
+        print(f"[PASS] Safe 503 response verified: HTTP {exc.status_code} - detail: '{exc.detail}'")
 
-    print("\n✓ All database tests completed cleanly and successfully.")
+    print("\n[PASS] All database tests completed cleanly and successfully.")
 
 
 if __name__ == "__main__":
-    run_tests()
+    try:
+        run_tests()
+    finally:
+        engine.dispose()
+        try:
+            if _temp_db_path.exists():
+                _temp_db_path.unlink()
+        except Exception:
+            pass

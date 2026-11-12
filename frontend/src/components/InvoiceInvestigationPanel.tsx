@@ -21,6 +21,10 @@ import type {
   InvoiceSummaryResponse,
 } from '../types/api'
 import { formatTimestamp, getRiskBadgeClasses } from '../utils/formatters'
+import {
+  type StartedInvoiceRequest,
+  createInvoiceSelectionController,
+} from '../utils/assistantHelpers'
 
 const MAX_UPLOAD_BYTES = 10 * 1024 * 1024 // 10 MB
 const ALLOWED_EXTENSIONS = ['.pdf', '.png', '.jpg', '.jpeg']
@@ -124,12 +128,26 @@ function validateClientFile(file: File): string | null {
   return null
 }
 
-export default function InvoiceInvestigationPanel() {
+interface InvoiceInvestigationPanelProps {
+  selectedInvoiceId?: number | null
+  onSelectInvoiceChange?: (invoiceId: number) => void
+  onAskAssistant?: (invoiceId: number) => void
+}
+
+export default function InvoiceInvestigationPanel({
+  selectedInvoiceId = null,
+  onSelectInvoiceChange,
+  onAskAssistant,
+}: InvoiceInvestigationPanelProps = {}) {
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const detailsSectionRef = useRef<HTMLElement | null>(null)
+  const selectedInvoiceIdRef = useRef<number | null>(selectedInvoiceId)
+  const isMountedRef = useRef(true)
 
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [clientError, setClientError] = useState<string | null>(null)
   const [uploadError, setUploadError] = useState<string | null>(null)
+  const [detailError, setDetailError] = useState<string | null>(null)
   const [isDragging, setIsDragging] = useState(false)
   const [isUploading, setIsUploading] = useState(false)
 
@@ -146,39 +164,108 @@ export default function InvoiceInvestigationPanel() {
   const [isDetailLoading, setIsDetailLoading] = useState(false)
   const [historyError, setHistoryError] = useState<string | null>(null)
 
+  const detailControllerRef = useRef<ReturnType<
+    typeof createInvoiceSelectionController<InvoiceDetailResponse>
+  > | null>(null)
+
+  const getDetailController = useCallback(() => {
+    if (!detailControllerRef.current) {
+      detailControllerRef.current = createInvoiceSelectionController<InvoiceDetailResponse>({
+        fetcher: fetchInvoiceDetail,
+        isMounted: () => isMountedRef.current,
+        onStartLoading: () => {
+          setIsDetailLoading(true)
+          setDetailError(null)
+        },
+        onSuccess: (_invoiceId, detail) => {
+          setActiveView(fromDetailResponse(detail))
+          setDetailError(null)
+        },
+        onError: (_invoiceId, message) => {
+          setDetailError(message)
+        },
+        onFinishLoading: () => {
+          setIsDetailLoading(false)
+        },
+      })
+    }
+    return detailControllerRef.current
+  }, [])
+
+  const scrollDetailsIntoView = useCallback(() => {
+    window.setTimeout(() => {
+      detailsSectionRef.current?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'nearest',
+      })
+    }, 60)
+  }, [])
+
+  useEffect(() => {
+    isMountedRef.current = true
+    return () => {
+      isMountedRef.current = false
+    }
+  }, [])
+
   const loadHistory = useCallback(async (selectFirstIfEmpty = false) => {
     setIsHistoryLoading(true)
     setHistoryError(null)
     try {
       const res = await fetchInvoices(20, 0)
+      if (!isMountedRef.current) return
       setHistory(res.items)
       setHistoryTotal(res.total)
       if (selectFirstIfEmpty && res.items.length > 0) {
-        const detail = await fetchInvoiceDetail(res.items[0].id)
-        setActiveView(fromDetailResponse(detail))
+        await getDetailController().startLoad(res.items[0].id).promise
       }
     } catch (err) {
+      if (!isMountedRef.current) return
       setHistoryError(
         err instanceof Error ? err.message : 'Unable to load invoice investigation history.',
       )
     } finally {
-      setIsHistoryLoading(false)
+      if (isMountedRef.current) {
+        setIsHistoryLoading(false)
+      }
     }
-  }, [])
+  }, [getDetailController])
+
+  const handleSelectHistoryItem = useCallback(
+    async (invoiceId: number, notifyParent = true) => {
+      if (notifyParent) {
+        onSelectInvoiceChange?.(invoiceId)
+      }
+      await getDetailController().startLoad(invoiceId).promise
+    },
+    [getDetailController, onSelectInvoiceChange],
+  )
+
+  useEffect(() => {
+    selectedInvoiceIdRef.current = selectedInvoiceId
+  }, [selectedInvoiceId])
 
   useEffect(() => {
     let active = true
+    let defaultDetailReq: StartedInvoiceRequest | null = null
+    const controller = getDetailController()
+
     fetchInvoices(20, 0)
       .then(async (res) => {
         if (!active) return
         setHistory(res.items)
         setHistoryTotal(res.total)
         setHistoryError(null)
-        if (res.items.length > 0) {
-          const detail = await fetchInvoiceDetail(res.items[0].id)
-          if (active) {
-            setActiveView(fromDetailResponse(detail))
-          }
+        if (
+          selectedInvoiceIdRef.current === null &&
+          controller.getLoadedInvoiceId() === null &&
+          controller.getInFlightInvoiceId() === null &&
+          res.items.length > 0
+        ) {
+          defaultDetailReq = controller.startLoad(res.items[0].id, {
+            isCancelled: () => !active || selectedInvoiceIdRef.current !== null,
+          })
+          await defaultDetailReq.promise
         }
       })
       .catch((err) => {
@@ -192,10 +279,40 @@ export default function InvoiceInvestigationPanel() {
           setIsHistoryLoading(false)
         }
       })
+
     return () => {
       active = false
+      defaultDetailReq?.cancel()
     }
-  }, [])
+  }, [getDetailController])
+
+  useEffect(() => {
+    if (selectedInvoiceId === null || selectedInvoiceId === undefined) return
+    const controller = getDetailController()
+    if (controller.isLoadedOrInFlight(selectedInvoiceId)) {
+      if (controller.isAlreadyLoaded(selectedInvoiceId)) {
+        setIsDetailLoading(false)
+        setDetailError(null)
+      }
+      scrollDetailsIntoView()
+      return
+    }
+
+    let cancelled = false
+    const req = controller.startLoad(selectedInvoiceId, {
+      isCancelled: () => cancelled,
+    })
+    void req.promise.then((didLoad) => {
+      if (!cancelled && didLoad) {
+        scrollDetailsIntoView()
+      }
+    })
+
+    return () => {
+      cancelled = true
+      req.cancel()
+    }
+  }, [getDetailController, scrollDetailsIntoView, selectedInvoiceId])
 
   const handleSelectFile = (file: File | null) => {
     setUploadError(null)
@@ -254,6 +371,9 @@ export default function InvoiceInvestigationPanel() {
         rejectDuplicates,
         corrections: cleanCorrections,
       })
+      getDetailController().markLoaded(response.invoice.id)
+      setDetailError(null)
+      onSelectInvoiceChange?.(response.invoice.id)
       setActiveView(fromAnalyzeResponse(response))
       setSelectedFile(null)
       if (fileInputRef.current) {
@@ -270,21 +390,6 @@ export default function InvoiceInvestigationPanel() {
       }
     } finally {
       setIsUploading(false)
-    }
-  }
-
-  const handleSelectHistoryItem = async (invoiceId: number) => {
-    setIsDetailLoading(true)
-    setUploadError(null)
-    try {
-      const detail = await fetchInvoiceDetail(invoiceId)
-      setActiveView(fromDetailResponse(detail))
-    } catch (err) {
-      setUploadError(
-        err instanceof Error ? err.message : 'Unable to load invoice details.',
-      )
-    } finally {
-      setIsDetailLoading(false)
     }
   }
 
@@ -575,7 +680,10 @@ export default function InvoiceInvestigationPanel() {
       </div>
 
       {/* Bottom: Selected / Latest Invoice Detail Inspection */}
-      <section className="rounded-xl border border-slate-800 bg-[#0D1424] p-5">
+      <section
+        ref={detailsSectionRef}
+        className="rounded-xl border border-slate-800 bg-[#0D1424] p-5"
+      >
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
             <h2 className="text-base font-semibold text-white">
@@ -586,17 +694,36 @@ export default function InvoiceInvestigationPanel() {
             </p>
           </div>
           {activeView && statusMeta && (
-            <span
-              className={`rounded-md border px-2.5 py-1 text-xs font-semibold ${statusMeta.classes}`}
-            >
-              {statusMeta.label}
-            </span>
+            <div className="flex flex-wrap items-center gap-2">
+              {onAskAssistant && (
+                <button
+                  type="button"
+                  onClick={() => onAskAssistant(activeView.invoice.id)}
+                  className="rounded-md border border-sky-500/40 bg-sky-500/15 px-2.5 py-1 text-xs font-medium text-sky-300 transition hover:bg-sky-500/25"
+                >
+                  Ask AI about Invoice #{activeView.invoice.id}
+                </button>
+              )}
+              <span
+                className={`rounded-md border px-2.5 py-1 text-xs font-semibold ${statusMeta.classes}`}
+              >
+                {statusMeta.label}
+              </span>
+            </div>
           )}
         </div>
 
         {isDetailLoading ? (
           <div className="mt-4 rounded-lg border border-slate-800 bg-[#090E1A] p-6 text-center text-xs text-slate-400">
             Loading invoice investigation detail…
+          </div>
+        ) : detailError ? (
+          <div
+            role="alert"
+            className="mt-4 rounded-lg border border-red-500/40 bg-red-500/10 p-4 text-xs text-red-200"
+          >
+            <p className="font-semibold text-red-100">Unable to load invoice details</p>
+            <p className="mt-1">{detailError}</p>
           </div>
         ) : !activeView ? (
           <div className="mt-4 rounded-lg border border-slate-800 bg-[#090E1A] p-6 text-center text-xs text-slate-400">

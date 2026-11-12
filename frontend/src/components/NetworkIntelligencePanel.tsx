@@ -25,6 +25,7 @@ interface AccountNetworkInspectorProps {
   error: string | null
   onInspectAccount: (accountId: string) => void
   onSelectTransactionRef: (reference: string) => void
+  onAskAssistant?: (accountId: string) => void
 }
 
 export function AccountNetworkInspector({
@@ -35,6 +36,7 @@ export function AccountNetworkInspector({
   error,
   onInspectAccount,
   onSelectTransactionRef,
+  onAskAssistant,
 }: AccountNetworkInspectorProps) {
   const [searchInput, setSearchInput] = useState('')
   const suspiciousSet = new Set(
@@ -138,15 +140,26 @@ export function AccountNetworkInspector({
               <span className="font-mono text-sm font-semibold text-sky-300">
                 {accountNetwork.account_id}
               </span>
-              {suspiciousSet.has(accountNetwork.account_id) ? (
-                <span className="rounded border border-amber-500/40 bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold text-amber-300">
-                  IN PATTERN LEADS
-                </span>
-              ) : (
-                <span className="rounded border border-slate-700 bg-slate-800 px-2 py-0.5 text-[10px] text-slate-300">
-                  STANDARD ENTITY
-                </span>
-              )}
+              <div className="flex flex-wrap items-center gap-1.5">
+                {onAskAssistant && (
+                  <button
+                    type="button"
+                    onClick={() => onAskAssistant(accountNetwork.account_id)}
+                    className="rounded border border-sky-500/40 bg-sky-500/15 px-2 py-0.5 text-[10px] font-medium text-sky-300 transition hover:bg-sky-500/25"
+                  >
+                    Ask AI
+                  </button>
+                )}
+                {suspiciousSet.has(accountNetwork.account_id) ? (
+                  <span className="rounded border border-amber-500/40 bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold text-amber-300">
+                    IN PATTERN LEADS
+                  </span>
+                ) : (
+                  <span className="rounded border border-slate-700 bg-slate-800 px-2 py-0.5 text-[10px] text-slate-300">
+                    STANDARD ENTITY
+                  </span>
+                )}
+              </div>
             </div>
 
             <div className="mt-3 grid grid-cols-3 gap-2 text-center">

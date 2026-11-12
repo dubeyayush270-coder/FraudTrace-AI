@@ -6,6 +6,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import HealthStatus from './components/HealthStatus'
+import InvestigationAssistantPanel from './components/InvestigationAssistantPanel'
 import InvestigationDetailsPanel from './components/InvestigationDetailsPanel'
 import InvoiceInvestigationPanel from './components/InvoiceInvestigationPanel'
 import NetworkGraphPanel from './components/NetworkGraphPanel'
@@ -16,6 +17,13 @@ import {
 import OverviewMetrics from './components/OverviewMetrics'
 import RecentTransactionsTable from './components/RecentTransactionsTable'
 import TransactionAnalyzeForm from './components/TransactionAnalyzeForm'
+import {
+  type AssistantContextSelection,
+  type WorkspaceTab,
+  resolveTabForAccountInspection,
+  resolveTabForInvoiceInspection,
+  resolveTabForTransactionInspection,
+} from './utils/assistantHelpers'
 import {
   ApiClientError,
   checkDatabaseHealth,
@@ -34,11 +42,12 @@ import type {
   TransactionResponse,
 } from './types/api'
 
-type WorkspaceTab = 'all' | 'transactions' | 'network' | 'invoices'
-
 export default function App() {
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('all')
   const [refreshTrigger, setRefreshTrigger] = useState(0)
+  const [assistantContextOverride, setAssistantContextOverride] =
+    useState<AssistantContextSelection | null>(null)
+  const [assistantPromptOverride, setAssistantPromptOverride] = useState<string | null>(null)
 
   // Dashboard core state
   const [dbConnected, setDbConnected] = useState<boolean | null>(null)
@@ -71,10 +80,15 @@ export default function App() {
   const [isAccountLoading, setIsAccountLoading] = useState(false)
   const [accountError, setAccountError] = useState<string | null>(null)
 
+  // Selected invoice state
+  const [selectedInvoiceId, setSelectedInvoiceId] = useState<number | null>(null)
+
   const selectedTxRef = useRef<number | null>(null)
   const selectedAcctRef = useRef<string | null>(null)
   const detailsSectionRef = useRef<HTMLDivElement | null>(null)
   const networkSectionRef = useRef<HTMLDivElement | null>(null)
+  const invoicesSectionRef = useRef<HTMLDivElement | null>(null)
+  const assistantSectionRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     selectedTxRef.current = selectedTransactionId
@@ -240,8 +254,9 @@ export default function App() {
 
   const handleSelectTransaction = useCallback(
     (transactionId: number) => {
-      if (activeTab === 'network') {
-        setActiveTab('all')
+      const nextTab = resolveTabForTransactionInspection(activeTab)
+      if (nextTab !== activeTab) {
+        setActiveTab(nextTab)
       }
       void loadTransactionDetailById(transactionId)
       window.setTimeout(() => {
@@ -265,8 +280,9 @@ export default function App() {
 
   const handleInspectAccount = useCallback(
     (accountId: string) => {
-      if (activeTab === 'transactions') {
-        setActiveTab('all')
+      const nextTab = resolveTabForAccountInspection(activeTab)
+      if (nextTab !== activeTab) {
+        setActiveTab(nextTab)
       }
       void loadAccountById(accountId)
       window.setTimeout(() => {
@@ -277,6 +293,23 @@ export default function App() {
       }, 60)
     },
     [activeTab, loadAccountById],
+  )
+
+  const handleSelectInvoice = useCallback(
+    (invoiceId: number) => {
+      setSelectedInvoiceId(invoiceId)
+      const nextTab = resolveTabForInvoiceInspection(activeTab)
+      if (nextTab !== activeTab) {
+        setActiveTab(nextTab)
+      }
+      window.setTimeout(() => {
+        invoicesSectionRef.current?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'nearest',
+        })
+      }, 60)
+    },
+    [activeTab],
   )
 
   const handlePatternFilterChange = useCallback(
@@ -311,6 +344,26 @@ export default function App() {
   const showTransactionsSection = activeTab === 'all' || activeTab === 'transactions'
   const showNetworkSection = activeTab === 'all' || activeTab === 'network'
   const showInvoicesSection = activeTab === 'all' || activeTab === 'invoices'
+  const showAssistantSection = activeTab === 'all' || activeTab === 'assistant'
+
+  const openAssistantWithContext = useCallback(
+    (nextContext: AssistantContextSelection, promptHint?: string) => {
+      setAssistantContextOverride(nextContext)
+      if (promptHint) {
+        setAssistantPromptOverride(promptHint)
+      }
+      if (activeTab !== 'all' && activeTab !== 'assistant') {
+        setActiveTab('assistant')
+      }
+      window.setTimeout(() => {
+        assistantSectionRef.current?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'start',
+        })
+      }, 60)
+    },
+    [activeTab],
+  )
 
   return (
     <div className="min-h-screen bg-[#070B14] text-slate-100">
@@ -349,6 +402,7 @@ export default function App() {
                   { id: 'transactions', label: 'Transactions & Risk' },
                   { id: 'network', label: 'Network & Graph' },
                   { id: 'invoices', label: 'Invoices' },
+                  { id: 'assistant', label: 'AI Assistant' },
                 ] as const
               ).map((tab) => (
                 <button
@@ -445,6 +499,17 @@ export default function App() {
                 isLoading={isDetailLoading}
                 error={detailError}
                 onInspectAccount={handleInspectAccount}
+                onAskAssistant={(txnId, invId) =>
+                  openAssistantWithContext(
+                    {
+                      transactionId: txnId,
+                      investigationId: invId,
+                      invoiceId: null,
+                      accountId: null,
+                    },
+                    `Why was transaction #${txnId} assigned its risk score and which indicators contributed?`,
+                  )
+                }
               />
             </div>
           </>
@@ -475,6 +540,17 @@ export default function App() {
                   error={accountError}
                   onInspectAccount={handleInspectAccount}
                   onSelectTransactionRef={handleSelectTransactionRef}
+                  onAskAssistant={(acctId) =>
+                    openAssistantWithContext(
+                      {
+                        transactionId: null,
+                        investigationId: null,
+                        invoiceId: null,
+                        accountId: acctId,
+                      },
+                      `Which accounts and suspicious network patterns are connected to ${acctId}?`,
+                    )
+                  }
                 />
               </div>
             </div>
@@ -494,7 +570,46 @@ export default function App() {
         )}
 
         {/* Band 3: Invoice Document Upload, Extraction & Findings */}
-        {showInvoicesSection && <InvoiceInvestigationPanel />}
+        {showInvoicesSection && (
+          <div ref={invoicesSectionRef}>
+            <InvoiceInvestigationPanel
+              selectedInvoiceId={selectedInvoiceId}
+              onSelectInvoiceChange={setSelectedInvoiceId}
+              onAskAssistant={(invoiceId) =>
+                openAssistantWithContext(
+                  {
+                    transactionId: null,
+                    investigationId: null,
+                    invoiceId,
+                    accountId: null,
+                  },
+                  `Explain the deterministic findings and extraction limitations for invoice #${invoiceId}.`,
+                )
+              }
+            />
+          </div>
+        )}
+
+        {/* Band 4: AI Investigation Assistant (kept mounted across tabs so conversation history persists in memory) */}
+        <div
+          ref={assistantSectionRef}
+          className={showAssistantSection ? undefined : 'hidden'}
+          aria-hidden={!showAssistantSection}
+        >
+          <InvestigationAssistantPanel
+            transactions={transactions}
+            selectedTransactionDetail={transactionDetail}
+            networkOverview={networkOverview}
+            selectedAccountId={selectedAccountId}
+            contextValue={assistantContextOverride}
+            questionDraft={assistantPromptOverride ?? undefined}
+            onQuestionDraftChange={setAssistantPromptOverride}
+            onContextChange={setAssistantContextOverride}
+            onSelectTransaction={handleSelectTransaction}
+            onInspectAccount={handleInspectAccount}
+            onSelectInvoice={handleSelectInvoice}
+          />
+        </div>
       </main>
     </div>
   )

@@ -217,3 +217,64 @@ class InvoiceFinding(Base):
             f"<InvoiceFinding(id={self.id}, invoice_id={self.invoice_id}, "
             f"code='{self.finding_code}', severity='{self.severity}')>"
         )
+
+
+class PayPalOrder(Base):
+    """
+    PayPalOrder Model
+    -----------------
+    Stores PayPal Sandbox Orders v2 lifecycle identifiers, validated requested/captured
+    amounts, and at-most-one link to an evaluated FraudTrace Transaction.
+    Never stores OAuth access tokens, client secrets, or sensitive card/payer credentials.
+    """
+    __tablename__ = "paypal_orders"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    internal_reference: Mapped[str] = mapped_column(
+        String(64), unique=True, index=True, nullable=False
+    )
+    paypal_order_id: Mapped[str] = mapped_column(
+        String(64), unique=True, index=True, nullable=False
+    )
+    paypal_capture_id: Mapped[Optional[str]] = mapped_column(
+        String(64), unique=True, index=True, nullable=True
+    )
+    intent: Mapped[str] = mapped_column(String(16), default="CAPTURE", nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="CREATED", nullable=False)
+
+    requested_amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    captured_amount: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 2), nullable=True)
+    currency: Mapped[str] = mapped_column(String(10), default="USD", nullable=False)
+
+    sender_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    receiver_id: Mapped[str] = mapped_column(
+        String(128), default="FRAUDTRACE_SANDBOX_MERCHANT", nullable=False
+    )
+    payer_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    approval_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    transaction_id: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        ForeignKey("transactions.id", ondelete="SET NULL"),
+        unique=True,
+        index=True,
+        nullable=True,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )
+    captured_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    transaction: Mapped[Optional["Transaction"]] = relationship()
+
+    def __repr__(self) -> str:
+        return (
+            f"<PayPalOrder(id={self.id}, internal_ref='{self.internal_reference}', "
+            f"order_id='{self.paypal_order_id}', status='{self.status}', txn_id={self.transaction_id})>"
+        )
